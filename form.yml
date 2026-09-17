@@ -1,0 +1,72 @@
+---
+cluster: "my-k8s-cluster"
+
+form:
+  - cpu
+  - memory
+  - gpu_model
+  - gpu_vram
+  - gpu_count
+  - wall_time
+
+attributes:
+  # GPU work is CPU work here, and the emulated utilisation figure is derived
+  # from how much of the CPU allocation a job actually uses. Too few cores and
+  # every job looks busy at trivial load; these defaults give PyTorch enough to
+  # work with and make the utilisation reading mean something.
+  cpu: 4
+  memory: 8
+
+  gpu_model:
+    widget: select
+    label: "Emulated GPU"
+    help: |
+      Which card the session pretends to have. This changes the model name,
+      memory size, clocks and power envelope reported by nvidia-smi and nvtop.
+      **No physical GPU is involved either way** - all computation runs on the CPU.
+    options:
+      - ["NVIDIA L4 (24 GB)", "l4"]
+      - ["NVIDIA A100 (40 GB)", "a100"]
+      - ["NVIDIA H100 (80 GB)", "h100"]
+    value: "l4"
+
+  gpu_vram:
+    widget: select
+    label: "GPU memory"
+    help: |
+      How much device memory the emulated card reports. **Card default** uses
+      the real board's figure (24 GB for an L4).
+
+      A deliberately small card is the cheapest way to teach memory pressure:
+      on 1 GB a learner hits a genuine out-of-memory error with a tensor that
+      costs the session almost nothing, so the exercise works without needing
+      24 GB of real RAM to fill. Pick 1&nbsp;GB or 2&nbsp;GB for a workshop that
+      covers batch sizing or OOM recovery.
+    options:
+      - ["Card default", ""]
+      - ["512 MiB", "512MiB"]
+      - ["1 GiB", "1GiB"]
+      - ["2 GiB", "2GiB"]
+      - ["4 GiB", "4GiB"]
+      - ["8 GiB", "8GiB"]
+    value: ""
+
+  gpu_count:
+    widget: select
+    label: "Number of GPUs"
+    help: |
+      How many emulated devices to present. Use more than one to teach device
+      selection and `CUDA_VISIBLE_DEVICES`; the scheduler will allocate them to
+      jobs independently.
+    options:
+      - ["1", "1"]
+      - ["2", "2"]
+      - ["4", "4"]
+    value: "1"
+
+  wall_time:
+    widget: number_field
+    label: "Hours"
+    min: 1
+    max: 12
+    value: 8

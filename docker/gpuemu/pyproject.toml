@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gpuemu"
+version = "0.1.0"
+description = "Emulated NVIDIA GPU for training environments with no physical GPU"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+# Deliberately dependency-free: this has to import cleanly inside a job that
+# has broken its own environment, which is a thing workshop attendees do.
+dependencies = []
+
+[project.scripts]
+gpuemud = "gpuemu.daemon:main"
+gpuemu-ctl = "gpuemu.cli:main"
+gpuemu-burn = "gpuemu.cli:burn"
+gpuemu-slurmd = "gpuemu.slurm:slurmd"
+# nvidia-smi is installed by the Dockerfile rather than here, so that a pip
+# install of this package on a machine with a real driver cannot shadow it.
+sbatch = "gpuemu.slurm:sbatch"
+squeue = "gpuemu.slurm:squeue"
+scancel = "gpuemu.slurm:scancel"
+sinfo = "gpuemu.slurm:sinfo"
+sacct = "gpuemu.slurm:sacct"
+scontrol = "gpuemu.slurm:scontrol"
+srun = "gpuemu.slurm:srun"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# So the suite runs from a source checkout without an editable install.
+pythonpath = ["src"]

@@ -1,0 +1,14 @@
+#!/usr/bin/env python3
+"""nvidia-smi for the emulated device.
+
+Installed to /usr/local/bin rather than through the package's entry points, so
+that pip installing gpuemu on a machine with a real driver cannot shadow the
+genuine tool.
+"""
+
+import sys
+
+from gpuemu.smi import main
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,9 @@
+---
+name: GPU (JupyterLab)
+category: Interactive Apps
+subcategory: Servers
+role: batch_connect
+description: |
+  JupyterLab with an emulated NVIDIA GPU, for teaching GPU workflows on
+  hardware that has none. nvidia-smi, nvtop, sbatch and torch.cuda all work
+  against a simulated device; all computation runs on the CPU.

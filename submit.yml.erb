@@ -1,0 +1,70 @@
+<%
+   pwd_cfg = "c.ServerApp.password=u\'sha1:${SALT}:${PASSWORD_SHA1}\'"
+   host_port_cfg = "c.ServerApp.base_url=\'/node/${HOST_CFG}/${PORT_CFG}/\'"
+
+   configmap_filename = "ondemand_config.py"
+   configmap_data = "c.NotebookApp.port = 8080"
+   utility_img = "ghcr.io/nesi/training-environment-k8s-utils:v0.1.0"
+
+   user = OodSupport::User.new
+
+   services_node = Resolv.getaddress("servicesnode")
+%>
+---
+script:
+  accounting_id: "<%= account %>"
+  wall_time: "<%= wall_time.to_i * 3600 %>"
+  native:
+    container:
+      name: "gpu"
+      image: "ghcr.io/nesi/training-environment-jupyter-gpu-app:v0.1.0"
+      command: ["/bin/bash","-l","<%= staged_root %>/job_script_content.sh"]
+      working_dir: "<%= Etc.getpwnam(ENV['USER']).dir %>"
+      restart_policy: 'OnFailure'
+      env:
+        NB_UID: "<%= user.uid %>"
+        NB_USER: "<%= user.name %>"
+        NB_GID: "<%= user.group.id %>"
+        HOME: "<%= user.home %>"
+        LOG_DIR: "<%= staged_root %>"
+        SHELL: "/bin/bash"
+        # Which card the emulator presents, and how many. Read by gpuemud at
+        # startup; see gpuemu/spec.py for the device definitions.
+        GPUEMU_DEVICE: "<%= gpu_model %>"
+        GPUEMU_GPUS: "<%= gpu_count %>"
+        # Empty means "use the real board's memory size". Set to something
+        # small (1GiB) for a workshop that teaches memory pressure.
+        GPUEMU_MEM_TOTAL: "<%= gpu_vram %>"
+      port: "8080"
+      cpu: "<%= cpu %>"
+      memory: "<%= memory %>Gi"
+    mounts:
+      - type: nfs
+        name: home
+        host: <%= services_node %>
+        path: /srv/homes
+        destination_path: /home/shared
+      - type: host
+        name: nslcd-socket
+        host_type: Socket
+        path: /var/run/nslcd/socket
+        destination_path: /var/run/nslcd/socket
+      - type: host
+        name: nsswitch-conf
+        host_type: File
+        path: /etc/nsswitch.conf
+        destination_path: /etc/nsswitch.conf
+    configmap:
+      files:
+        - filename: 'k8_helper'
+          data: |
+            #!/usr/bin/env bash
+
+            set -x
+
+            KEY=$1
+            VALUE=$(echo -n $2 | base64)
+            CFG="$(hostname)-secret"
+
+            kubectl get secret ${CFG} -o json | jq --arg key $KEY --arg value $VALUE '.data[$key] = $value'  | kubectl apply -f -
+          mount_path: '/opt/open_ondemand/helpers'

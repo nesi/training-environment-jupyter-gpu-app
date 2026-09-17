@@ -1,0 +1,15 @@
+# Build and test droppings from local runs. Without this they are copied into
+# the image, and a stale build/ directory can shadow the real sources.
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+**/*.egg-info/
+**/build/
+**/dist/
+**/.mypy_cache/
+**/.ruff_cache/
+
+# Compiled artefacts; the image builds its own.
+gpuemu/nvml/*.so
+gpuemu/nvml/*.so.1
+gpuemu/nvml/abi_dump

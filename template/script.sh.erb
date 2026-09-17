@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+
+# send all output to pod.log
+exec &> >(tee -a "${LOG_DIR}/pod.log")
+
+echo "TIMING - Starting main script at: $(date)"
+
+# copying config file for debugging - updated path
+cp "${HOME}/ondemand_config.py" ./
+
+# Set working directory to home directory
+cd "${HOME}"
+
+set -x
+
+# ---------------------------------------------------------------------------
+# Start the GPU emulator.
+#
+# Two background processes: gpuemud maintains the device state that nvidia-smi
+# and nvtop read, and gpuemu-slurmd runs submitted batch jobs. Both have to be
+# up before JupyterLab starts, otherwise the first thing a learner does -
+# running nvidia-smi - fails and the session looks broken.
+#
+# GPUEMU_DEVICE and GPUEMU_GPUS come from the form, through submit.yml.erb.
+# ---------------------------------------------------------------------------
+mkdir -p /run/gpuemu/claims /run/gpuemu/slurm/jobs
+chmod 1777 /run/gpuemu /run/gpuemu/claims /run/gpuemu/slurm /run/gpuemu/slurm/jobs || true
+
+gpuemu-ctl start
+
+# Fail loudly here rather than leaving a session where the GPU silently is not
+# there. Everything the workshop does depends on this working.
+if ! nvidia-smi -L; then
+    echo "ERROR: the GPU emulator did not start. Session will be unusable." >&2
+    gpuemu-ctl status >&2 || true
+    cat /run/gpuemu/gpuemud.log >&2 || true
+fi
+
+echo "TIMING - GPU emulator started at: $(date)"
+
+# ---------------------------------------------------------------------------
+# Copy workshop material into the user's home directory.
+#
+# --ignore-existing so a learner's edits survive a session restart, which is
+# the same choice the other training apps make.
+# ---------------------------------------------------------------------------
+mkdir -p "${HOME}/gpu-training"
+rsync --ignore-existing -avz /opt/gpu-training/notebooks/ "${HOME}/gpu-training/"
+rsync --ignore-existing -avz /opt/gpu-training/examples/ "${HOME}/gpu-training/examples/"
+
+echo "TIMING - Starting jupyter at: $(date)"
+
+# launch JupyterLab
+jupyter lab --config="${CONFIG_FILE}"

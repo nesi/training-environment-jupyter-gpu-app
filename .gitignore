@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.venv/
+
+# Compiled emulator artefacts; the image builds its own.
+docker/gpuemu/nvml/*.so
+docker/gpuemu/nvml/*.so.1
+docker/gpuemu/nvml/abi_dump
+
+# Emulator runtime state, if anything is run from a checkout.
+*.bin
+slurm-*.out
+
+.DS_Store

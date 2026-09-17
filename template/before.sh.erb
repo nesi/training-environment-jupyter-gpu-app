@@ -1,0 +1,39 @@
+exec &> >(tee -a "session.log")
+
+# This script (`before.sh.erb`) is sourced directly into the main Bash script
+# that is run when the batch job starts up. It is called before the `script.sh`
+# is forked off into a separate process.
+
+# setup host and port
+source /bin/find_host_port
+export host="$HOST_CFG"
+export port="$PORT_CFG"
+
+export hostname=$(kubectl get pods $(hostname) -o jsonpath="{.spec.nodeName}").cloud.nesi.nz
+
+# setup password
+source /bin/save_passwd_as_secret
+export password="$PASSWORD"
+source /bin/create_salt_and_sha1
+
+# write config file for JupyterLab
+export CONFIG_FILE=${PWD}/ondemand_config.py
+cat << EOF > "${CONFIG_FILE}"
+c.FileContentsManager.delete_to_trash = False
+c.LabApp.check_for_updates_class = 'jupyterlab.NeverCheckForUpdate'
+c.LabApp.extension_manager = 'pypi'
+c.LabServerApp.copy_absolute_path = True
+c.PluginManager.level = 'user'
+c.ServerApp.allow_origin = '*'
+c.ServerApp.base_url = "/node/${hostname}/${PORT_CFG}/"
+c.ServerApp.disable_check_xsrf = True
+c.ServerApp.ip = '0.0.0.0'
+c.ServerApp.open_browser = False
+c.ServerApp.password = u"sha1:${SALT}:${PASSWORD_SHA1}"
+c.ServerApp.port = 8080
+c.ServerApp.port_retries = 0
+c.ServerApp.root_dir = "${HOME}"
+EOF
+
+# Make sure config file is readable
+chmod 644 "${CONFIG_FILE}"
