@@ -13,3 +13,12 @@
 gpuemu/nvml/*.so
 gpuemu/nvml/*.so.1
 gpuemu/nvml/abi_dump
+
+# macOS. notebooks/ and examples/ are copied wholesale into the image and then
+# rsynced into the learner's home directory, so a stray .DS_Store would end up
+# visible in their JupyterLab file browser.
+**/.DS_Store
+**/._*
+**/__MACOSX/
+**/.Spotlight-V100
+**/.Trashes

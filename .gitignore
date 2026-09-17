@@ -16,4 +16,22 @@ docker/gpuemu/nvml/abi_dump
 *.bin
 slurm-*.out
 
+# macOS. The app is built and run on Linux, so anything Finder or Spotlight
+# leaves behind is noise here. ._* are AppleDouble resource forks, which macOS
+# writes when copying onto non-HFS volumes such as a USB stick or a network
+# share, and they travel with the files if you let them.
 .DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.DocumentRevisions-V100
+.TemporaryItems
+.Trashes
+.fseventsd
+__MACOSX/
+
+# Editors
+.vscode/
+.idea/
+*.swp
