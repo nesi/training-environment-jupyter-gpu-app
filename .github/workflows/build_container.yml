@@ -13,6 +13,30 @@ env:
 # There is a single job in this workflow. It's configured to run on the latest available version of Ubuntu.
 jobs:
 
+  # The image tag inside submit.yml.erb is what a deployed session actually
+  # runs. It is easy to miss on release, and the training-environment config's
+  # `k8s_container` does NOT override it - that value only feeds the pod
+  # pre-puller. A mismatch means the cluster silently runs an old image.
+  check-submit-image-tag:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: submit.yml.erb must pin this release's tag
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          pinned=$(grep -oE 'training-environment-jupyter-gpu-app:[^"]+' submit.yml.erb | cut -d: -f2)
+          echo "git tag            : $tag"
+          echo "submit.yml.erb pins: $pinned"
+          if [ "$pinned" != "$tag" ]; then
+            echo "::error file=submit.yml.erb::pins $pinned but this release is $tag."
+            echo "  A session would run the wrong image. Update the image: line and re-tag."
+            exit 1
+          fi
+          echo "ok: they match"
+
+
   # The staged template scripts must keep their executable bit. Open OnDemand
   # renders script.sh.erb into the job directory preserving its mode and then
   # runs it, so a file committed as 644 fails at session launch with

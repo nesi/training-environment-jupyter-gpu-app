@@ -17,7 +17,19 @@
 #
 set -euo pipefail
 
-IMAGE="ghcr.io/nesi/training-environment-jupyter-gpu-app:v0.1.1"
+REGISTRY_IMAGE="ghcr.io/nesi/training-environment-jupyter-gpu-app"
+
+# Derive the tag from this checkout rather than hardcoding one. A pinned
+# default goes stale the moment a release is cut, and then this script quietly
+# runs an old image while claiming to be the current app - which is exactly
+# what happened with v0.1.1. Falls back to :latest outside a git checkout.
+default_image() {
+    local tag
+    tag=$(git -C "$(dirname "${BASH_SOURCE[0]}")" describe --tags --abbrev=0 2>/dev/null || true)
+    echo "${REGISTRY_IMAGE}:${tag:-latest}"
+}
+
+IMAGE="$(default_image)"
 PORT=8888
 DEVICE="l4"
 VRAM="1GiB"
