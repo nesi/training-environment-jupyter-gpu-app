@@ -12,6 +12,31 @@ env:
 
 # There is a single job in this workflow. It's configured to run on the latest available version of Ubuntu.
 jobs:
+
+  # The staged template scripts must keep their executable bit. Open OnDemand
+  # renders script.sh.erb into the job directory preserving its mode and then
+  # runs it, so a file committed as 644 fails at session launch with
+  # "Permission denied" - and nothing before that point notices.
+  check-template-permissions:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: template/*.erb must be executable
+        run: |
+          fail=0
+          for f in template/before.sh.erb template/script.sh.erb; do
+            mode=$(git ls-files -s "$f" | cut -d' ' -f1)
+            if [ "$mode" != "100755" ]; then
+              echo "::error file=$f::$f is mode $mode, expected 100755."
+              echo "  Fix with: git update-index --chmod=+x $f"
+              fail=1
+            else
+              echo "ok: $f is $mode"
+            fi
+          done
+          exit $fail
+
   build-and-push-image:
     runs-on: ubuntu-latest
     # Sets the permissions granted to the `GITHUB_TOKEN` for the actions in this job.
