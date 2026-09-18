@@ -79,10 +79,15 @@ directory; the daemon aggregates the live ones and reaps any whose owner has
 died, so a killed notebook kernel frees its memory the way a real driver would
 clean up a dead context.
 
-Claims are checked against the card's real capacity, so asking for more than
-23 GB fails with a genuine out-of-memory error. Hitting OOM and learning to
-read it is a large part of what a GPU workshop is for, and an emulator with
-infinite memory would quietly teach the opposite.
+Claims are checked against the card's capacity, so asking for more than it has
+fails with a genuine out-of-memory error. Hitting OOM and learning to read it
+is a large part of what a GPU workshop is for, and an emulator with infinite
+memory would quietly teach the opposite.
+
+That capacity defaults to **1 GB**, not the board's real size — see
+`gpu_vram` under [Session options](#session-options). A small card is what
+makes the exercise affordable: filling a real 24 GB card would cost 24 GB of
+host RAM per session.
 
 ### PyTorch
 
@@ -141,16 +146,28 @@ docker/examples/       job scripts and training scripts, copied to ~/gpu-trainin
 
 ## Session options
 
-`gpu_model` chooses which card is presented — `l4` (24 GB), `a100` (40 GB) or
-`h100` (80 GB). It changes the reported name, memory, clocks and power
-envelope, and nothing else; no configuration is any more or less real than the
-others.
+`gpu_model` chooses which card is presented:
 
-`gpu_vram` overrides how much device memory the card reports. **Setting this to
-1 GB is the cheapest way to teach memory pressure**: a learner hits a genuine
-out-of-memory error with a tensor that costs the session almost nothing, so
-batch-sizing and OOM-recovery exercises work without needing 24 GB of real RAM
-to fill. Leave it at the card default for workshops that do not cover memory.
+| Option | Reports as | Memory | Notes |
+|---|---|---|---|
+| `l4` | NVIDIA L4 | 24 GB | default; passive, 72 W |
+| `a100` | NVIDIA A100-PCIE-40GB | 40 GB | Ampere, 250 W |
+| `h100` | NVIDIA H100 PCIe | 80 GB | Hopper, 350 W |
+| `rtxpro6000` | NVIDIA RTX PRO 6000 Blackwell Server Edition | 96 GB | Blackwell, 600 W, PCIe Gen5, cc 12.0 |
+
+It changes the reported name, memory, clocks, power envelope and compute
+capability, and nothing else; no configuration is any more or less real than
+the others.
+
+`gpu_vram` sets how much device memory the card reports, and **defaults to
+1 GB** rather than the board's real size. That is deliberate: a small card is
+what makes memory pressure teachable, since a learner hits a genuine
+out-of-memory error with a tensor that costs the session almost nothing.
+Filling a real 24 GB card would need 24 GB of host RAM per session.
+
+Choose **Card default (full size)** when the workshop does not cover memory, or
+when the reported capacity is itself the point — comparing an L4 against an RTX
+PRO 6000, say.
 
 `gpu_count` presents 1, 2 or 4 devices, which is how to teach device selection
 and `CUDA_VISIBLE_DEVICES`. The scheduler allocates them to jobs
@@ -160,6 +177,35 @@ CPU and memory default to 4 cores and 8 GB. Do not reduce the CPU allocation
 much below that: emulated GPU utilisation is derived from real CPU use, so on
 one or two cores every trivial job pins the meter at 100% and the reading stops
 teaching anything.
+
+## Trying it on your own machine
+
+```bash
+./run-local.sh
+```
+
+This starts the same image the cluster runs and prints a JupyterLab URL. Docker
+is the only requirement.
+
+```bash
+./run-local.sh --device rtxpro6000 --vram ""   # a different card, full size
+./run-local.sh --gpus 2                        # two devices
+./run-local.sh --shell                         # a terminal instead of JupyterLab
+./run-local.sh --build                         # build from this checkout first
+```
+
+Everything a learner actually does inside the session behaves identically:
+`nvidia-smi`, `nvtop`, `sbatch`, the notebooks, PyTorch, OOM errors. What it
+does not reproduce is the Open OnDemand wrapper — no login, no k8s, no NFS
+home directories, no LDAP — so `form.yml`, `submit.yml.erb` and
+`template/script.sh.erb` are only exercised by an actual deployment. That
+matters: the one bug that reached the cluster (`template/*.erb` committed
+non-executable) was in exactly that untested layer, which is why CI now checks
+it directly.
+
+On an Apple Silicon Mac the published image is amd64 and runs under emulation —
+correct but slow to start. `--build` produces a native image if you are
+iterating.
 
 ## Building and testing
 
@@ -205,8 +251,8 @@ Read by the emulator at startup; set in `submit.yml.erb` or the Dockerfile.
 
 | Variable | Default | Effect |
 |---|---|---|
-| `GPUEMU_DEVICE` | `l4` | Which card to emulate (`l4`, `a100`, `h100`) |
-| `GPUEMU_MEM_TOTAL` | card default | Override device memory, e.g. `1GiB` |
+| `GPUEMU_DEVICE` | `l4` | Card to emulate: `l4`, `a100`, `h100`, `rtxpro6000` |
+| `GPUEMU_MEM_TOTAL` | `1GiB` | Device memory; empty means the real board's size |
 | `GPUEMU_GPUS` | `1` | How many devices to present (max 8) |
 | `GPUEMU_UTIL_GAIN` | `1.0` | Scales derived utilisation; raise if jobs look idle |
 | `GPUEMU_AUTOCLAIM` | `1` | Claim the device when a process imports torch or numba.cuda |

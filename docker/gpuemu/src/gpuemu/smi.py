@@ -134,7 +134,14 @@ def render_table(snap: Snapshot, gpus: list[tuple[int, GPUState]]) -> str:
         disp = "On" if g.display_active else "Off"
 
         # Row 1: index and model, PCI address, ECC error count.
-        c1 = f"{idx:>4}  {g.name:<30}{persistence:>3}  "
+        #
+        # The name field is a fixed 30 columns. Format-spec padding widens but
+        # never truncates, so a long product name - "NVIDIA RTX PRO 6000
+        # Blackwell Server Edition" is 44 characters - would push the
+        # Persistence-M column off the end of the row. Truncate explicitly;
+        # `nvidia-smi -L` and `-q` still report the name in full.
+        name = g.name if len(g.name) <= 30 else g.name[:27] + "..."
+        c1 = f"{idx:>4}  {name:<30}{persistence:>3}  "
         c2 = f"   {g.bus_id:<16} {disp:>3} "
         c3 = f"{ecc:>21} "
         out.append("|" + c1[:_C1].ljust(_C1) + "|" + c2[:_C2].ljust(_C2) + "|" + c3[:_C3].ljust(_C3) + "|")

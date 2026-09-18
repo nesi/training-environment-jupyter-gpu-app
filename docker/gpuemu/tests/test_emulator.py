@@ -360,3 +360,61 @@ def test_rejects_unparseable_mem_total(monkeypatch):
     monkeypatch.setenv("GPUEMU_MEM_TOTAL", "loads")
     with pytest.raises(SystemExit):
         spec.selected_device()
+
+
+# ---------------------------------------------------------------- devices
+
+
+@pytest.mark.parametrize("key", ["l4", "a100", "h100", "rtxpro6000"])
+def test_every_device_is_internally_consistent(monkeypatch, key):
+    """Each card must be self-consistent enough to model and to display."""
+    monkeypatch.setenv("GPUEMU_DEVICE", key)
+    monkeypatch.delenv("GPUEMU_MEM_TOTAL", raising=False)
+    d = spec.selected_device()
+
+    assert d.mem_reserved_mib < d.mem_total_mib
+    assert d.power_idle_w < d.power_limit_w
+    assert d.power_min_limit_w <= d.power_limit_w
+    assert d.temp_idle_c < d.temp_max_load_c < d.temp_slowdown_c < d.temp_shutdown_c
+    assert d.idle_clock_gr_mhz < d.max_clock_gr_mhz
+    assert d.cuda_cores > 0 and d.sm_count > 0
+    assert d.architecture and d.architecture != "Unknown"
+
+    # And it must actually drive the simulation without blowing a limit.
+    daemon = Daemon()
+    with client.gpu(memory="256MiB", util=100):
+        for _ in range(60):
+            daemon.tick(0.2)
+        gpu = _read(daemon).gpus[0]
+    assert gpu.name == d.name
+    assert gpu.util_gpu > 80
+    assert gpu.power_mw <= d.power_limit_w * 1000
+    assert gpu.temp < d.temp_slowdown_c
+
+
+def test_rtx_pro_6000_headline_figures(monkeypatch):
+    """The numbers a learner would check against NVIDIA's published specs."""
+    monkeypatch.setenv("GPUEMU_DEVICE", "rtxpro6000")
+    monkeypatch.delenv("GPUEMU_MEM_TOTAL", raising=False)
+    d = spec.selected_device()
+
+    assert d.name == "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+    assert d.architecture == "Blackwell"
+    assert d.cuda_cores == 24064
+    assert d.sm_count == 188
+    assert (d.cc_major, d.cc_minor) == (12, 0)
+    assert d.power_limit_w == 600.0
+    assert d.pcie_max_gen == 5
+    assert not d.has_fan  # Server Edition is passive
+    assert 95 <= d.mem_total_mib / 1024 <= 96  # ~96 GB
+
+    # FP32 = cores x 2 x clock should land on NVIDIA's quoted 120 TFLOPS.
+    tflops = d.cuda_cores * 2 * (d.max_clock_gr_mhz * 1e6) / 1e12
+    assert 118 <= tflops <= 122, tflops
+
+
+def test_unknown_device_names_are_listed_in_the_error(monkeypatch):
+    monkeypatch.setenv("GPUEMU_DEVICE", "rtx4090")
+    with pytest.raises(SystemExit) as exc:
+        spec.selected_device()
+    assert "rtxpro6000" in str(exc.value)

@@ -28,28 +28,32 @@ attributes:
       - ["NVIDIA L4 (24 GB)", "l4"]
       - ["NVIDIA A100 (40 GB)", "a100"]
       - ["NVIDIA H100 (80 GB)", "h100"]
+      - ["NVIDIA RTX PRO 6000 Blackwell (96 GB)", "rtxpro6000"]
     value: "l4"
 
   gpu_vram:
     widget: select
     label: "GPU memory"
     help: |
-      How much device memory the emulated card reports. **Card default** uses
-      the real board's figure (24 GB for an L4).
+      How much device memory the emulated card reports.
 
-      A deliberately small card is the cheapest way to teach memory pressure:
-      on 1 GB a learner hits a genuine out-of-memory error with a tensor that
-      costs the session almost nothing, so the exercise works without needing
-      24 GB of real RAM to fill. Pick 1&nbsp;GB or 2&nbsp;GB for a workshop that
-      covers batch sizing or OOM recovery.
+      The default of 1&nbsp;GB is deliberate. A small card is the practical way
+      to teach memory pressure: a learner hits a genuine out-of-memory error
+      with a tensor that costs the session almost nothing, so batch-sizing and
+      OOM-recovery exercises work without the session needing tens of gigabytes
+      of real RAM to fill.
+
+      **Card default** reports the real board's figure instead (24 GB for an
+      L4, 96 GB for an RTX PRO 6000). Choose it when the workshop does not
+      cover memory, or when the reported size itself is the point.
     options:
-      - ["Card default", ""]
+      - ["1 GiB (default)", "1GiB"]
       - ["512 MiB", "512MiB"]
-      - ["1 GiB", "1GiB"]
       - ["2 GiB", "2GiB"]
       - ["4 GiB", "4GiB"]
       - ["8 GiB", "8GiB"]
-    value: ""
+      - ["Card default (full size)", ""]
+    value: "1GiB"
 
   gpu_count:
     widget: select

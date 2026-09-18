@@ -214,3 +214,29 @@ def test_nvidia_smi_shows_the_device_when_allocated(device, monkeypatch, capsys)
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0")
     assert smi.main(["-L"]) == 0
     assert "NVIDIA L4" in capsys.readouterr().out
+
+
+def test_long_device_name_does_not_break_the_table(monkeypatch, capsys, tmp_path):
+    """A 44-character product name must not displace the Persistence column."""
+    monkeypatch.setenv("GPUEMU_DEVICE", "rtxpro6000")
+    monkeypatch.delenv("GPUEMU_MEM_TOTAL", raising=False)
+    from gpuemu.daemon import Daemon
+
+    Daemon().tick(0.2)
+    assert smi.main([]) == 0
+    out = capsys.readouterr().out
+
+    box = [ln for ln in out.splitlines() if ln.startswith(("+", "|"))]
+    assert all(len(ln) == 91 for ln in box), [len(ln) for ln in box]
+
+    row = next(ln for ln in box if "RTX PRO 6000" in ln)
+    assert row.endswith("|")
+    # The persistence column must still be there, and the three panels intact.
+    assert "On" in row
+    assert row.count("|") == 4, row
+    assert "..." in row  # truncated rather than overflowing
+
+    # The untruncated name is still available where it is not width-limited.
+    capsys.readouterr()
+    assert smi.main(["-L"]) == 0
+    assert "NVIDIA RTX PRO 6000 Blackwell Server Edition" in capsys.readouterr().out

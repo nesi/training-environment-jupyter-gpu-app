@@ -159,10 +159,50 @@ H100_PCIE = replace(
     mem_bandwidth_gbps=2000.0,
 )
 
+RTX_PRO_6000 = replace(
+    L4,
+    name="NVIDIA RTX PRO 6000 Blackwell Server Edition",
+    architecture="Blackwell",
+    # 96 GB nominal; the reported figure is that less the driver's framebuffer
+    # overhead, in the same proportion the H100 shows.
+    mem_total_mib=97887,
+    mem_reserved_mib=1100,
+    sm_count=188,
+    cuda_cores=24064,
+    cc_major=12,
+    cc_minor=0,
+    # NVIDIA quotes 120 TFLOPS FP32, and FP32 = cores x 2 x clock, which puts
+    # the boost clock at 24064 x 2 x 2.49 GHz = 119.8 TFLOPS.
+    max_clock_gr_mhz=2490,
+    max_clock_sm_mhz=2490,
+    # 1597 GB/s over a 512-bit bus is ~25 Gbps; nvidia-smi reports GDDR7 at half
+    # the effective rate, the same convention it uses for GDDR6X.
+    max_clock_mem_mhz=12501,
+    max_clock_video_mhz=2100,
+    power_limit_w=600.0,
+    power_idle_w=30.0,
+    # NVIDIA document this board as capable of being power capped to 450 W.
+    power_min_limit_w=450.0,
+    temp_idle_c=35.0,
+    temp_max_load_c=80.0,
+    temp_slowdown_c=93,
+    temp_shutdown_c=98,
+    # GB202. Published as 10de:2bb1; the Server Edition SKU may carry its own
+    # device ID, which we have not been able to confirm.
+    pci_device_id=0x2BB110DE,
+    pci_subsys_id=0x204B10DE,
+    pcie_max_gen=5,
+    pcie_max_width=16,
+    # The Server Edition is a dual-slot passive card, like the L4.
+    has_fan=False,
+    mem_bandwidth_gbps=1597.0,
+)
+
 DEVICES = {
     "l4": L4,
     "a100": A100_40GB,
     "h100": H100_PCIE,
+    "rtxpro6000": RTX_PRO_6000,
 }
 
 # Reported by nvidia-smi and NVML. Pinned to a real driver/CUDA pairing so that

@@ -158,6 +158,13 @@ ENV GPUEMU_STATE_FILE=/run/gpuemu/state.bin
 ENV GPUEMU_CLAIMS_DIR=/run/gpuemu/claims
 ENV GPUEMU_SLURM_DIR=/run/gpuemu/slurm
 
+# Default the emulated card to 1 GB of VRAM. A small card is what makes memory
+# pressure teachable: a learner hits a real out-of-memory error with a tensor
+# that costs the session almost nothing, rather than needing to allocate tens of
+# gigabytes of host RAM to reach the limit. The app form overrides this, and an
+# empty value means "report the real board's size".
+ENV GPUEMU_MEM_TOTAL=1GiB
+
 # sitecustomize runs in every Python process, which is what makes the two
 # settings above take effect in notebook kernels and batch jobs alike.
 RUN printf '%s\n' \
