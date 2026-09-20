@@ -69,6 +69,13 @@ def install(torch=None) -> None:
         _INSTALLED = True
         return
 
+    # Which build of torch this is does not depend on whether Slurm handed
+    # this particular job a GPU, so the version metadata is set either way. On
+    # the cluster, a job that forgot --gpus-per-node still has the same CUDA
+    # build installed; it just has no device. Reporting "+cpu" here instead
+    # would diagnose the wrong problem.
+    _patch_version(torch)
+
     # No visible device means no device, and torch.cuda.is_available() must stay
     # False. This is the whole point of the "forgot --gpus-per-node" lesson: a
     # job that did not ask for a GPU has to fall back to the CPU here exactly as
@@ -88,6 +95,46 @@ def install(torch=None) -> None:
         _patch_device_property(torch)
 
     _INSTALLED = True
+
+
+# ----------------------------------------------------------------- version
+
+
+def _patch_version(torch) -> None:
+    """Make torch's build metadata agree with the device the shim provides.
+
+    The image installs the CPU wheel, which reports ``2.14.0+cpu`` and leaves
+    ``torch.version.cuda`` as None. Alongside ``torch.cuda.is_available()``
+    returning True, that is a combination which cannot occur on real hardware:
+    a CPU-only build never sees a GPU, and a CUDA build reports ``+cu124`` and
+    a CUDA version.
+
+    Leaving it inconsistent is worse than untidy. "Your PyTorch is a CPU-only
+    build" is the most common real cause of a job that was given a GPU and did
+    not use it, and this string is the first thing anyone checks to diagnose
+    it. An environment that prints the symptom of a broken install next to a
+    working GPU teaches people to ignore the one signal that would have told
+    them what was wrong.
+
+    ``__version__`` is a ``TorchVersion``, not a plain str - it compares
+    against tuples, so ``torch.__version__ >= (2, 0)`` keeps working only if
+    the same class is reconstructed.
+
+    ``torch.backends.cudnn`` is deliberately left alone. It is metadata nothing
+    here reads, and making it claim availability could change which kernels
+    torch dispatches to.
+    """
+    tag = "cu" + spec.CUDA_VERSION.replace(".", "")
+    try:
+        current = torch.__version__
+        patched = type(current)(f"{str(current).split('+')[0]}+{tag}")
+        torch.__version__ = patched
+        torch.version.__version__ = patched
+        torch.version.cuda = spec.CUDA_VERSION
+    except Exception:
+        # Version metadata is cosmetic next to the rest of the shim; never let
+        # it be the reason importing torch fails.
+        pass
 
 
 # ------------------------------------------------------------------ memory

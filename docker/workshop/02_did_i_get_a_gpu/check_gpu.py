@@ -77,14 +77,36 @@ except ImportError:
     print("  PyTorch is not installed; skipping.")
     sys.exit(0)
 
+# These two lines together tell you whether you have a GPU-capable build at
+# all, before anything about whether a GPU is present:
+#
+#   2.14.0+cu124  / cuda 12.4   a CUDA build. It can use a GPU
+#   2.14.0+cpu    / cuda None   a CPU-only build. It never will
+#
+# A CPU-only build is the most common reason a job that was given a GPU
+# quietly runs without one, and it is invisible unless you look here.
 print(f"  torch version:         {torch.__version__}")
+print(f"  built against CUDA:    {torch.version.cuda}")
 print(f"  torch.cuda.is_available(): {torch.cuda.is_available()}")
 
 if not torch.cuda.is_available():
     print()
-    print("  PyTorch cannot see a GPU. If section 1 showed one, then the")
-    print("  problem is your software, not your Slurm request - a CPU-only")
-    print("  build of PyTorch is the usual cause.")
+    # Three different problems produce "no GPU" here, and they have three
+    # different fixes. Sections 1 and 3 together tell you which one you have.
+    if not visible:
+        print("  PyTorch found no GPU because this job was not given one.")
+        print("  This is a Slurm problem, not a software problem. Add:")
+        print("      #SBATCH --gpus-per-node l4:1")
+    elif torch.version.cuda is None:
+        print("  This job HAS a GPU, but this is a CPU-ONLY build of PyTorch")
+        print("  ('+cpu', and no CUDA version above). It cannot use a GPU no")
+        print("  matter what Slurm gives it. This is a software problem:")
+        print("  install a CUDA build, or load the right module.")
+    else:
+        print("  This job HAS a GPU and this IS a CUDA build, but the two")
+        print("  cannot talk to each other. Usually the CUDA module loaded")
+        print("  does not match the version PyTorch was built against")
+        print(f"  (CUDA {torch.version.cuda}).")
     sys.exit(0)
 
 print(f"  device count:          {torch.cuda.device_count()}")

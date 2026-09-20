@@ -66,7 +66,9 @@ def _on_imported(name: str, module) -> None:
             torch_shim.install(module)
     except Exception:
         pass
-    _do_claim()
+    # A job that was given no GPU must not appear in nvidia-smi holding one.
+    if _visible():
+        _do_claim()
 
 
 class _ImportHook:
@@ -123,7 +125,11 @@ class _ImportHook:
 
 
 def install() -> None:
-    if not _enabled() or not _visible():
+    # Deliberately not gated on _visible(). A job with no GPU still needs the
+    # hook, so that torch reports the CUDA build it has and no device - which
+    # is what the cluster shows, and a different diagnosis from "your torch is
+    # a CPU-only build". The claim itself is gated instead, in _on_imported.
+    if not _enabled():
         return
 
     # Already imported - common in a notebook kernel that preloads libraries,

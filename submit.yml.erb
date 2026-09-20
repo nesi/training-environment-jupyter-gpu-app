@@ -22,7 +22,7 @@ script:
       # `k8s_container` does NOT control it - that value only tells the pod
       # pre-puller which image to cache on the worker nodes. Bump both together
       # on every release; CI enforces it on tag builds.
-      image: "ghcr.io/nesi/training-environment-jupyter-gpu-app:v0.3.0"
+      image: "ghcr.io/nesi/training-environment-jupyter-gpu-app:v0.3.1"
       command: ["/bin/bash","-l","<%= staged_root %>/job_script_content.sh"]
       working_dir: "<%= Etc.getpwnam(ENV['USER']).dir %>"
       restart_policy: 'OnFailure'

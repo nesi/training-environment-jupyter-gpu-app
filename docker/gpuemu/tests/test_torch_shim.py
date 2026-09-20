@@ -112,6 +112,29 @@ def test_failed_allocation_does_not_leak_accounting():
     assert torch.cuda.memory_allocated() == baseline
 
 
+def test_build_metadata_matches_a_cuda_build():
+    """+cpu with is_available() True is a combination real hardware cannot show.
+
+    "Your PyTorch is a CPU-only build" is the usual cause of a job that had a
+    GPU and ignored it, and this string is how people diagnose it. Printing
+    the symptom of a broken install beside a working GPU would teach learners
+    to dismiss the signal.
+    """
+    from gpuemu import spec
+
+    assert torch.cuda.is_available()
+    assert "+cpu" not in torch.__version__
+    assert torch.__version__.endswith("+cu" + spec.CUDA_VERSION.replace(".", ""))
+    assert torch.version.__version__ == torch.__version__
+    assert torch.version.cuda == spec.CUDA_VERSION
+
+
+def test_version_still_compares_against_tuples():
+    """torch.__version__ is a TorchVersion, not a str. Keep it one."""
+    assert torch.__version__ >= (2, 0)
+    assert isinstance(torch.__version__, str)
+
+
 def test_memory_is_reported_to_nvml():
     """What torch thinks it holds must be what nvidia-smi shows."""
     from gpuemu.daemon import Daemon
@@ -211,3 +234,36 @@ def test_torch_reports_no_cuda_when_no_gpu_allocated():
         capture_output=True, text=True, env=env,
     )
     assert out.stdout.strip() == "False", f"stdout={out.stdout!r} stderr={out.stderr!r}"
+
+
+def test_no_gpu_allocated_still_looks_like_a_cuda_build():
+    """Forgetting --gpus-per-node is not the same bug as a CPU-only build.
+
+    On the cluster, a job that forgot to ask for a GPU still has whatever
+    torch it always had - a CUDA build, reporting no device. If this
+    environment reported "+cpu" and cuda None there instead, the exercise
+    would point learners at the wrong fix: reinstalling their software rather
+    than correcting one line of their Slurm script.
+    """
+    import os
+    import pathlib
+    import subprocess
+    import sys
+
+    from gpuemu import spec
+
+    env = dict(os.environ)
+    env["CUDA_VISIBLE_DEVICES"] = ""
+    src = str(pathlib.Path(__file__).resolve().parents[1] / "src")
+    env["PYTHONPATH"] = src + os.pathsep + env.get("PYTHONPATH", "")
+
+    out = subprocess.run(
+        [sys.executable, "-c",
+         "import gpuemu.torch_shim, torch;"
+         "print(torch.__version__, torch.version.cuda, torch.cuda.is_available())"],
+        capture_output=True, text=True, env=env,
+    )
+    version, cuda, available = out.stdout.split()
+    assert version.endswith("+cu" + spec.CUDA_VERSION.replace(".", "")), out.stdout
+    assert cuda == spec.CUDA_VERSION, out.stdout
+    assert available == "False", out.stdout
