@@ -6,7 +6,7 @@
 # and JupyterLab, and prints a URL to open. What it does not reproduce is the
 # Open OnDemand wrapper around it: no login page, no k8s, no NFS home
 # directories, no LDAP. Everything a learner actually does inside the session -
-# nvidia-smi, nvtop, sbatch, the notebooks, PyTorch - behaves identically.
+# nvidia-smi, nvtop, sbatch, seff, the exercises, PyTorch - behave identically.
 #
 # Usage:
 #   ./run-local.sh                          # defaults, as deployed
@@ -112,7 +112,7 @@ cat <<BANNER
     Image        : $IMAGE
 
   JupyterLab will be at:  http://localhost:${PORT}/lab
-  Notebooks are under     /root/gpu-training/
+  Exercises are under     /root/gpu-training/
   Press Ctrl-C to stop.
 
 BANNER
@@ -124,8 +124,7 @@ exec docker run "${COMMON[@]}" -p "${PORT}:8888" "$IMAGE" bash -lc '
     # Mirror what template/script.sh.erb does on the cluster, so the session
     # you see locally has the same contents as the deployed one.
     mkdir -p "${HOME}/gpu-training"
-    rsync --ignore-existing -a /opt/gpu-training/notebooks/ "${HOME}/gpu-training/"
-    rsync --ignore-existing -a /opt/gpu-training/examples/  "${HOME}/gpu-training/examples/"
+    rsync --ignore-existing -a /opt/gpu-training/workshop/ "${HOME}/gpu-training/"
 
     nvidia-smi -L
     echo

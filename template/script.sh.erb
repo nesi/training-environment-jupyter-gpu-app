@@ -45,8 +45,7 @@ echo "TIMING - GPU emulator started at: $(date)"
 # the same choice the other training apps make.
 # ---------------------------------------------------------------------------
 mkdir -p "${HOME}/gpu-training"
-rsync --ignore-existing -avz /opt/gpu-training/notebooks/ "${HOME}/gpu-training/"
-rsync --ignore-existing -avz /opt/gpu-training/examples/ "${HOME}/gpu-training/examples/"
+rsync --ignore-existing -avz /opt/gpu-training/workshop/ "${HOME}/gpu-training/"
 
 echo "TIMING - Starting jupyter at: $(date)"
 

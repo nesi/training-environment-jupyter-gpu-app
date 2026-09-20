@@ -33,6 +33,8 @@ import os
 import sys
 import warnings
 
+import weakref
+
 from . import client, spec
 
 _INSTALLED = False
@@ -113,11 +115,36 @@ class _MemoryLedger:
         self.allocated = max(0, self.allocated - max(0, nbytes))
         try:
             self.claim.set_memory(self.allocated)
-        except client.OutOfMemoryError:
+        except Exception:
+            # Best effort. This also runs from weakref finalizers during
+            # interpreter shutdown, where the claims directory may already be
+            # gone, and a traceback there would be alarming and pointless.
             pass
 
     def reset_peak(self) -> None:
         self.peak = self.allocated
+
+    def track(self, obj, nbytes: int) -> None:
+        """Give ``nbytes`` back when ``obj`` is garbage collected.
+
+        Without this the ledger only ever grows, and on a card configured with
+        1 GB of memory any ordinary loop - allocate a batch, compute, discard,
+        repeat - runs out after a few iterations. That would be a bug wearing
+        the costume of the lesson: a learner told to fix an out-of-memory error
+        by reducing their batch size would find it made no difference, because
+        the memory was never really being released.
+
+        A finalizer holds no reference to the tensor, so this does not keep
+        anything alive.
+        """
+        if nbytes <= 0:
+            return
+        try:
+            weakref.finalize(obj, self.remove, nbytes)
+        except TypeError:
+            # Not weak-referenceable. Nothing to do but leave it allocated,
+            # which is the behaviour we had before.
+            pass
 
 
 def _oom_error(exc: Exception):
@@ -347,12 +374,16 @@ def _patch_placement(torch, claim) -> None:
             # a no-op here only because the data never left host memory; on a
             # real device it would be a fresh allocation, and the whole point
             # of the accounting is to reflect what the device would hold.
-            ledger.add(_tensor_bytes(out))
+            nbytes = _tensor_bytes(out)
+            ledger.add(nbytes)
+            ledger.track(out, nbytes)
         return out
 
     def tensor_cuda(self, device=None, non_blocking=False, **kwargs):
         out = orig_to(self, "cpu")
-        ledger.add(_tensor_bytes(out))
+        nbytes = _tensor_bytes(out)
+        ledger.add(nbytes)
+        ledger.track(out, nbytes)
         return out
 
     torch.Tensor.to = tensor_to
@@ -371,13 +402,17 @@ def _patch_placement(torch, claim) -> None:
             kwargs["device"] = _rewrite_device(kwargs["device"])
         out = orig_module_to(self, *args, **kwargs)
         if moved:
-            ledger.add(sum(_tensor_bytes(p) for p in self.parameters()))
-            ledger.add(sum(_tensor_bytes(b) for b in self.buffers()))
+            nbytes = sum(_tensor_bytes(p) for p in self.parameters())
+            nbytes += sum(_tensor_bytes(b) for b in self.buffers())
+            ledger.add(nbytes)
+            ledger.track(self, nbytes)
         return out
 
     def module_cuda(self, device=None):
-        ledger.add(sum(_tensor_bytes(p) for p in self.parameters()))
-        ledger.add(sum(_tensor_bytes(b) for b in self.buffers()))
+        nbytes = sum(_tensor_bytes(p) for p in self.parameters())
+        nbytes += sum(_tensor_bytes(b) for b in self.buffers())
+        ledger.add(nbytes)
+        ledger.track(self, nbytes)
         return self
 
     torch.nn.Module.to = module_to
@@ -501,10 +536,13 @@ def _wrap_factory(fn, ledger):
             if actual != estimated:
                 ledger.remove(estimated)
                 ledger.add(actual)
+            ledger.track(out, actual)
             return out
 
         out = fn(*args, **kwargs)
-        ledger.add(_tensor_bytes(out))
+        actual = _tensor_bytes(out)
+        ledger.add(actual)
+        ledger.track(out, actual)
         return out
 
     wrapper.__name__ = fn_name or "wrapped"

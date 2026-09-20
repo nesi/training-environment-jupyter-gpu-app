@@ -114,6 +114,14 @@ def test_sbatch_wrap_needs_no_script_file(capsys):
     assert slurm.JobStore().all()[0].name == "wrapped"
 
 
+def test_sbatch_parsable_prints_only_the_job_id(capsys):
+    """JOBID=$(sbatch --parsable ...) is how the exercises chain jobs together."""
+    assert slurm.sbatch(["--parsable", "--wrap", "true"]) == 0
+    out = capsys.readouterr().out.strip()
+    assert out.isdigit(), out
+    assert int(out) == slurm.JobStore().all()[0].job_id
+
+
 def test_sbatch_cli_flag_beats_script_directive(tmp_path, capsys):
     script = tmp_path / "j.sl"
     script.write_text("#!/bin/bash\n#SBATCH --job-name=from-file\necho hi\n")

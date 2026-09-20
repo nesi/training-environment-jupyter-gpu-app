@@ -25,12 +25,14 @@ be worse than useless.
 | Watching a job live with `nvtop` | Tensor cores, mixed-precision speedups |
 | Diagnosing "my job ran but ignored the GPU" | Multi-GPU scaling behaviour, NCCL |
 | Device memory budgeting, and recovering from OOM | Custom CUDA C++ extensions, Triton, `torch.compile` |
-| Writing correct CUDA kernels — threads, blocks, shared memory, races | Whether one kernel is faster than another |
+| Reading `seff`: CPU, memory and GPU efficiency after a job | Whether one kernel is faster than another |
 | Structuring a batch job script around a GPU allocation | GPU-specific numerical behaviour (TF32, etc.) |
+| Working out which parts of a workload belong on a GPU | How much slower fp64 really is on a 1:64 card |
+| Writing correct CUDA kernels — threads, blocks, shared memory, races | Anything that needs a real driver or real device code |
 
 **The single rule to give learners: no timing measured in this environment
-means anything about GPU performance.** The session banner, the welcome
-notebook and the example training script all say so, in those words. Please do
+means anything about GPU performance.** The session banner, the workshop
+README and the exercise scripts all say so, in those words. Please do
 not remove those notices — an emulator this convincing is only safe to use if
 it is loud about what it is.
 
@@ -76,7 +78,7 @@ when it stops, it idles. Nothing has to be annotated for this to work.
 
 A process claims device memory by dropping a small JSON file in a claims
 directory; the daemon aggregates the live ones and reaps any whose owner has
-died, so a killed notebook kernel frees its memory the way a real driver would
+died, so a killed script frees its memory the way a real driver would
 clean up a dead context.
 
 Claims are checked against the card's capacity, so asking for more than it has
@@ -111,7 +113,9 @@ where learners write GPU code and get genuinely correct GPU behaviour back,
 including the bugs — remove a `syncthreads` and the answer goes wrong for the
 right reason. It is slow, so keep problem sizes small.
 
-See `docker/examples/04-cuda-kernel.py`.
+See `docker/workshop/supplementary/cuda_kernel.py`. The main workshop does
+not cover this: it is written for researchers running GPU software, not for
+people writing GPU kernels.
 
 ### Batch jobs
 
@@ -125,10 +129,43 @@ The detail that earns its place: **a job that did not request a GPU is started
 with `CUDA_VISIBLE_DEVICES` empty**, so it genuinely cannot see the device and
 `nvidia-smi` inside it fails. Forgetting `--gpus-per-node` therefore produces
 the same baffling symptom here as it does on Mahuika, which is exactly the
-lesson. `docker/examples/02-forgot-the-gpu.sl` is that mistake, on purpose.
+lesson. `docker/workshop/01_requesting_a_gpu/forgot-the-gpu.sl` is that
+mistake, on purpose.
 
 It is a teaching scaffold, not Slurm: one node, first-come-first-served, no
 fair-share, no backfill, no accounting database.
+
+### Job efficiency: seff and svisit
+
+`seff <jobid>` reports what a finished job actually used, and `svisit <jobid>`
+opens a terminal "on the node" running a job so `nvtop` can watch it. Both
+follow [nesi/opt-nesi-bin][bin] rather than the summary on the documentation
+site, which is a version behind — the labels are `Avg CPU Utilisation` and
+`Peak Mem Utilisation`, percentages are whole numbers right-aligned so every
+`%` lands in the same column, and `Cluster:` only appears with `-M`.
+
+```
+Job ID: 1000
+State: COMPLETED
+Tasks: 1
+Cores: 2
+Job Wall-time:          2%  00:00:02 of 00:02:00 time limit
+Avg CPU Utilisation:   42%  00:00:01 of 00:00:04 core-walltime
+Peak Mem Utilisation:   3%  13.41 MB of 512.00 MB
+Peak GPU Utilisation:   0%
+Peak GPU Memory Util:   0%  0.00 MB of 1 GB
+```
+
+The numbers are measured, not invented. CPU time and peak resident memory come
+from `wait4()` on the job — the same accounting a cgroup would give, and the
+only way to get an honest figure out of a job that runs for four seconds.
+Utilisation is a rate with no total to read afterwards, so that alone is
+sampled while the job runs.
+
+A job that asked for no GPU gets no GPU lines, exactly as on the cluster, and
+that absence is the diagnosis for "why was my GPU job so slow?".
+
+[bin]: https://github.com/nesi/opt-nesi-bin
 
 ---
 
@@ -137,11 +174,10 @@ fair-share, no backfill, no accounting database.
 ```
 form.yml               session options: CPUs, memory, GPU model and count, wall time
 submit.yml.erb         k8s pod spec; passes GPUEMU_DEVICE / GPUEMU_GPUS through
-template/script.sh.erb starts the emulator, copies notebooks, launches JupyterLab
+template/script.sh.erb starts the emulator, copies the material, launches JupyterLab
 docker/Dockerfile      the session image
 docker/gpuemu/         the emulator (see docker/gpuemu/README.md)
-docker/notebooks/      workshop notebooks, copied to ~/gpu-training/
-docker/examples/       job scripts and training scripts, copied to ~/gpu-training/examples/
+docker/workshop/       the exercises, copied to ~/gpu-training/
 ```
 
 ## Session options
@@ -150,10 +186,15 @@ docker/examples/       job scripts and training scripts, copied to ~/gpu-trainin
 
 | Option | Reports as | Memory | Notes |
 |---|---|---|---|
-| `l4` | NVIDIA L4 | 24 GB | default; passive, 72 W |
-| `a100` | NVIDIA A100-PCIE-40GB | 40 GB | Ampere, 250 W |
-| `h100` | NVIDIA H100 PCIe | 80 GB | Hopper, 350 W |
-| `rtxpro6000` | NVIDIA RTX PRO 6000 Blackwell Server Edition | 96 GB | Blackwell, 600 W, PCIe Gen5, cc 12.0 |
+| `l4` | NVIDIA L4 | 24 GB | default; passive, 72 W; fp64 at 1/62 of fp32 |
+| `a100` | NVIDIA A100-SXM4-80GB | 80 GB | Ampere, 400 W; fp64 at 1/2 |
+| `h100` | NVIDIA H100 NVL | 94 GB | Hopper, 400 W; fp64 at 1/2 |
+| `rtxpro6000` | NVIDIA RTX PRO 6000 Blackwell Server Edition | 96 GB | Blackwell, 600 W, PCIe Gen5, cc 12.0; fp64 at 1/63 |
+
+These match the cards on the cluster rather than the nearest generic part, so
+a learner comparing what they see here against the hardware documentation
+finds the same VRAM figures and the same Slurm names (`l4`, `a100`, `h100`,
+`pro_6000`).
 
 It changes the reported name, memory, clocks, power envelope and compute
 capability, and nothing else; no configuration is any more or less real than
@@ -195,7 +236,7 @@ is the only requirement.
 ```
 
 Everything a learner actually does inside the session behaves identically:
-`nvidia-smi`, `nvtop`, `sbatch`, the notebooks, PyTorch, OOM errors. What it
+`nvidia-smi`, `nvtop`, `sbatch`, `seff`, the exercises, PyTorch, OOM errors. What it
 does not reproduce is the Open OnDemand wrapper — no login, no k8s, no NFS
 home directories, no LDAP — so `form.yml`, `submit.yml.erb` and
 `template/script.sh.erb` are only exercised by an actual deployment. That

@@ -80,6 +80,13 @@ class DeviceSpec:
     tf32_tflops: float = 0.0  # tensor core, dense
     fp16_tflops: float = 0.0  # tensor core, dense
 
+    # The capacity this board is sold and documented as, in GB. Distinct from
+    # mem_total_mib, which is the usable framebuffer nvidia-smi reports once
+    # ECC and the driver have taken their share - a 24 GB L4 shows 23034 MiB.
+    # Comparison tables should use this one, because it is the number in the
+    # cluster's documentation and the number a researcher will quote.
+    vram_gb: int = 0
+
     # How this card is spelled in a Slurm request, and how many sit in one
     # node, on the cluster this workshop teaches against.
     gres_name: str = ""
@@ -138,6 +145,7 @@ L4 = DeviceSpec(
     fp64_tflops=0.489,
     tf32_tflops=60.0,
     fp16_tflops=121.0,
+    vram_gb=24,
     gres_name="l4",
     max_per_node=4,
     host_cores_per_node=168,
@@ -175,6 +183,7 @@ A100_80GB = replace(
     fp64_tflops=9.7,
     tf32_tflops=156.0,
     fp16_tflops=312.0,
+    vram_gb=80,
     gres_name="a100",
     max_per_node=4,
     host_cores_per_node=64,
@@ -206,6 +215,7 @@ H100_NVL = replace(
     fp64_tflops=30.0,
     tf32_tflops=835.0,
     fp16_tflops=1671.0,
+    vram_gb=94,
     gres_name="h100",
     max_per_node=2,
     host_cores_per_node=168,
@@ -255,6 +265,7 @@ RTX_PRO_6000 = replace(
     fp64_tflops=1.9,
     tf32_tflops=240.0,
     fp16_tflops=480.0,
+    vram_gb=96,
     gres_name="pro_6000",
     max_per_node=2,
     host_cores_per_node=168,

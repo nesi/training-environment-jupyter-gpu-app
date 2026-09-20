@@ -117,21 +117,23 @@ def test_memory_is_reported_to_nvml():
     from gpuemu.daemon import Daemon
     from gpuemu.shm import StateReader
 
-    torch.randn(2048, 2048, device="cuda")  # 16 MiB
+    held = torch.randn(2048, 2048, device="cuda")  # 16 MiB
     d = Daemon()
     d.tick(0.2)
     with StateReader(d.writer.path) as r:
         gpu = r.read().gpus[0]
     assert gpu.mem_used >= 16 * 1024**2
     assert any(p.used_mem >= 16 * 1024**2 for p in gpu.processes)
+    del held
 
 
 def test_mem_get_info_reflects_allocation():
     free_before, total = torch.cuda.mem_get_info()
-    torch.randn(2048, 2048, device="cuda")  # 16 MiB
+    held = torch.randn(2048, 2048, device="cuda")  # 16 MiB
     free_after, _ = torch.cuda.mem_get_info()
     assert total == torch.cuda.get_device_properties(0).total_memory
     assert free_before - free_after == 16 * 1024**2
+    del held
 
 
 def test_empty_cache_and_reset_peak_are_harmless():
@@ -155,13 +157,37 @@ def test_synchronize_and_events_work():
 
 def test_oom_message_reports_this_process_allocation():
     """'already allocated' must mean what PyTorch means by it: ours."""
-    torch.randn(4096, 4096, device="cuda")  # 64 MiB
+    held = torch.randn(4096, 4096, device="cuda")  # 64 MiB
     with pytest.raises(RuntimeError) as exc:
         torch.zeros(100_000, 100_000, device="cuda")
     message = str(exc.value)
     assert "64.00 MiB already allocated" in message, message
     assert "total capacity" in message
     assert "free" in message
+    # "Tried to allocate" means the failed allocation, not the running total.
+    # It is the first line anyone reads when debugging an OOM, and reporting
+    # the total there would misattribute a 37 GiB request to a 64 MiB tensor.
+    assert "Tried to allocate 37.25 GiB" in message, message
+    del held
+
+
+def test_device_memory_is_released_when_a_tensor_is_collected():
+    """A tensor that goes out of scope must give its device memory back.
+
+    Without this the ledger only grows, and on the 1 GB card the workshop
+    configures, an ordinary allocate-compute-discard loop runs out after a
+    few iterations. A learner told to fix that by reducing their batch size
+    would find it changed nothing.
+    """
+    import gc
+
+    before = torch.cuda.memory_allocated()
+    for _ in range(10):
+        block = torch.zeros(4 * 262144, dtype=torch.float32, device="cuda")  # 4 MiB
+        assert torch.cuda.memory_allocated() > before
+        del block
+    gc.collect()
+    assert torch.cuda.memory_allocated() == before
 
 
 def test_torch_reports_no_cuda_when_no_gpu_allocated():

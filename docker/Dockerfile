@@ -140,6 +140,8 @@ RUN cd /opt/gpuemu/src \
     && gpuemud --once \
     && nvidia-smi -L \
     && nvidia-smi \
+    && seff -h | grep -q "Usage: seff" \
+    && svisit -h | grep -q "svisit \[-t\]" \
     && python3 -c "import ctypes; l=ctypes.CDLL('libnvidia-ml.so.1'); assert l.nvmlInit_v2()==0; n=ctypes.c_uint(); assert l.nvmlDeviceGetCount_v2(ctypes.byref(n))==0; assert n.value==1, n.value; print('NVML shim OK')" \
     && python3 -c "\
 import numpy as np; from numba import cuda;\
@@ -165,22 +167,41 @@ ENV GPUEMU_SLURM_DIR=/run/gpuemu/slurm
 # empty value means "report the real board's size".
 ENV GPUEMU_MEM_TOTAL=1GiB
 
-# sitecustomize runs in every Python process, which is what makes the two
-# settings above take effect in notebook kernels and batch jobs alike.
-RUN printf '%s\n' \
-    'try:' \
-    '    from gpuemu.autoclaim import install as _gpuemu_autoclaim' \
-    '    _gpuemu_autoclaim()' \
-    'except Exception:' \
-    '    pass' \
-    > "$(python3 -c 'import site; print(site.getsitepackages()[0])')/sitecustomize.py"
+# Install the autoclaim hook into every Python process.
+#
+# This used to be written as sitecustomize.py, which did not work: Ubuntu ships
+# its own /usr/lib/python3.10/sitecustomize.py, that directory comes earlier on
+# sys.path, and only the first one found is imported. Ours was never loaded, so
+# `import torch` got no shim and torch.cuda.is_available() was False inside
+# every job - the exact symptom this workshop teaches as "you forgot to ask for
+# a GPU", produced by a job that had one.
+#
+# A .pth file is the right mechanism: site processes *every* .pth in *every*
+# site directory, so this cannot be shadowed. It goes in whichever directory
+# gpuemu itself was installed into, since that is guaranteed to be a site
+# directory on this interpreter's path. The zz- prefix makes it run last, after
+# anything that adjusts sys.path.
+RUN SITEDIR="$(python3 -c 'import gpuemu, pathlib; print(pathlib.Path(gpuemu.__file__).parent.parent)')" \
+    && printf '%s\n' \
+        'try:' \
+        '    from gpuemu.autoclaim import install as _install' \
+        '    _install()' \
+        'except Exception:' \
+        '    pass' \
+        > "${SITEDIR}/gpuemu_autostart.py" \
+    && echo 'import gpuemu_autostart' > "${SITEDIR}/zz-gpuemu-autostart.pth" \
+    && python3 -c "import sys; assert 'gpuemu_autostart' in sys.modules, 'the .pth did not run'" \
+    && rm -f /usr/local/lib/python3.10/dist-packages/sitecustomize.py
 
 # ---------------------------------------------------------------------------
 # Workshop material
 # ---------------------------------------------------------------------------
-COPY notebooks /opt/gpu-training/notebooks
-COPY examples /opt/gpu-training/examples
-RUN chmod -R o+rX /opt/gpu-training
+# Scripts and job files, not notebooks: the workshop is taught in a terminal,
+# because a terminal is where a researcher will actually be when they run this
+# on the cluster.
+COPY workshop /opt/gpu-training/workshop
+RUN chmod -R o+rX /opt/gpu-training \
+    && chmod 0755 /opt/gpu-training/workshop/*/*.sh
 
 # A short banner so anyone opening a terminal knows the GPU is emulated. Being
 # quiet about that would be the one genuinely harmful thing this image could do.

@@ -284,6 +284,11 @@ def _check_capacity(
     ``want`` replaces it rather than adding to it. ``own_current`` is what that
     claim currently holds, which the message reports as "already allocated" -
     the same thing PyTorch's own OOM message means by the phrase.
+
+    Note that ``want`` is the claim's new *total*, while "Tried to allocate"
+    means the size of the allocation that failed. Reporting the total there
+    would tell a learner their 64 MB tensor was a 1 GB one, and that line is
+    the first thing anyone reads when debugging an out-of-memory error.
     """
     lock = _capacity_lock()
     try:
@@ -291,8 +296,9 @@ def _check_capacity(
         others = total_claimed(device, exclude=exclude)
         if others + want > capacity:
             free = max(0, capacity - others - own_current)
+            increment = max(0, want - own_current)
             raise OutOfMemoryError(
-                f"CUDA out of memory. Tried to allocate {_fmt(want)} "
+                f"CUDA out of memory. Tried to allocate {_fmt(increment)} "
                 f"(GPU {device}; {_fmt(capacity)} total capacity; "
                 f"{_fmt(own_current)} already allocated; {_fmt(free)} free"
                 + (f"; {_fmt(others)} used by other processes)." if others else ").")

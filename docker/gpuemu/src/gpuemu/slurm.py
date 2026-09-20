@@ -152,6 +152,15 @@ class Job:
 
     @property
     def mean_gpu_util(self) -> float:
+        """Mean utilisation over the job's life.
+
+        seff labels this "Peak GPU Utilisation", and for a job with one step -
+        which is every job here - that is what the cluster reports too: Slurm's
+        gpuutil TRES is the *average* over a step, and "peak" refers to the
+        largest across overlapping steps. Reporting a true instantaneous peak
+        would be useless anyway, since any job that touches the GPU at all
+        touches 100% of it for an instant.
+        """
         if not self.gpu_util_samples:
             return 0.0
         return self.gpu_util_sum / self.gpu_util_samples
@@ -316,6 +325,10 @@ def _sbatch_parser() -> argparse.ArgumentParser:
     ap.add_argument("--gpus-per-task", default=None)
     ap.add_argument("--hint", default=None)
     ap.add_argument("--wrap", default=None)
+    # Print just the job ID, for scripts that capture it. Without this a
+    # workshop cannot teach JOBID=$(sbatch --parsable ...), which is how you
+    # submit several jobs and then compare them.
+    ap.add_argument("--parsable", action="store_true")
     # Accepted and recorded rather than acted on. A workshop teaches people to
     # write `--qos debug` for a quick test, and a script that errors out on the
     # flag it was just told to use teaches the opposite.
@@ -488,7 +501,10 @@ def sbatch(argv: list[str] | None = None) -> int:
         qos=merged.qos or "",
     )
     store.save(job)
-    print(f"Submitted batch job {job_id}")
+    if merged.parsable:
+        print(job_id)
+    else:
+        print(f"Submitted batch job {job_id}")
     if not _scheduler_running():
         print(
             "sbatch: warning: the scheduler does not appear to be running, so this "
