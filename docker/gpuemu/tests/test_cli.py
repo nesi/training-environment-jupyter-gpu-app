@@ -122,6 +122,130 @@ def test_sbatch_cli_flag_beats_script_directive(tmp_path, capsys):
     assert slurm.JobStore().all()[0].name == "from-cli"
 
 
+# ---------------------------------------------------------------------- seff
+
+
+def _finished_job(gpus: int = 1, **fields):
+    """A job record in a terminal state, as the scheduler would have left it."""
+    store = slurm.JobStore()
+    store.jobs_dir.mkdir(parents=True, exist_ok=True)
+    defaults = dict(
+        job_id=store.next_id(),
+        name="demo",
+        user="learner",
+        script="/tmp/demo.sl",
+        workdir="/tmp",
+        stdout="/tmp/slurm-1.out",
+        stderr="/tmp/slurm-1.out",
+        state=slurm.COMPLETED,
+        cpus=2,
+        mem_mb=512,
+        gpus=gpus,
+        gpu_ids=list(range(gpus)),
+        ntasks=1,
+        time_limit_s=120,
+        start_time=1000.0,
+        end_time=1060.0,
+        cpu_seconds=90.0,
+        max_rss_mb=284.46,
+        gpu_util_sum=430.0,
+        gpu_util_samples=10,
+        gpu_mem_peak_mb=510.0,
+    )
+    defaults.update(fields)
+    job = slurm.Job(**defaults)
+    store.save(job)
+    return job
+
+
+def test_seff_matches_the_clusters_layout(device, capsys):
+    """The output has to line up with the real seff, column for column.
+
+    A learner reads this here and then reads it on the cluster; if the labels
+    or the '%' column move, the thing they practised reading is not the thing
+    they will be looking at.
+    """
+    job = _finished_job()
+    assert slurm.seff([str(job.job_id)]) == 0
+    lines = capsys.readouterr().out.splitlines()
+
+    assert lines[0] == f"Job ID: {job.job_id}"
+    assert lines[1] == "State: COMPLETED"
+    assert lines[2] == "Tasks: 1"
+    assert lines[3] == "Cores: 2"
+
+    pct = [ln for ln in lines if "%" in ln]
+    assert [ln.index("%") for ln in pct] == [25] * len(pct), pct
+    assert pct[0].startswith("Job Wall-time:")
+    assert pct[1].startswith("Avg CPU Utilisation:")
+    assert pct[2].startswith("Peak Mem Utilisation:")
+    assert pct[3].startswith("Peak GPU Utilisation:")
+    assert pct[4].startswith("Peak GPU Memory Util:")
+
+
+def test_seff_reports_the_measured_numbers(device, capsys):
+    job = _finished_job()
+    slurm.seff([str(job.job_id)])
+    out = capsys.readouterr().out
+    # 90 CPU-seconds of a 60 s job on 2 cores is 75% of the core-walltime.
+    assert "75%  00:01:30 of 00:02:00 core-walltime" in out
+    assert "284.46 MB of 512.00 MB" in out
+    assert "Peak GPU Utilisation:  43%" in out
+
+
+def test_seff_omits_gpu_lines_when_no_gpu_was_requested(device, capsys):
+    """The absent lines are the diagnosis for 'why was my GPU job so slow?'."""
+    job = _finished_job(gpus=0, gpu_ids=[])
+    slurm.seff([str(job.job_id)])
+    out = capsys.readouterr().out
+    assert "Peak Mem Utilisation:" in out
+    assert "GPU" not in out
+
+
+def test_seff_declines_to_guess_at_a_running_job(device, capsys):
+    job = _finished_job(state=slurm.RUNNING, end_time=0.0)
+    assert slurm.seff([str(job.job_id)]) == 0
+    out = capsys.readouterr().out
+    assert "Efficiency not available for RUNNING jobs." in out
+    assert "%" not in out
+
+
+def test_seff_on_an_unknown_job(capsys):
+    assert slurm.seff(["987654"]) == 2
+    assert "Job not found." in capsys.readouterr().err
+
+
+def test_seff_accepts_dash_j_and_array_ids(device, capsys):
+    job = _finished_job()
+    assert slurm.seff(["-j", f"{job.job_id}_3"]) == 0
+    assert f"Job ID: {job.job_id}" in capsys.readouterr().out
+
+
+def test_seff_help_does_not_crash(capsys):
+    assert slurm.seff(["-h"]) == 1
+    assert "Usage: seff" in capsys.readouterr().out
+
+
+# -------------------------------------------------------------------- svisit
+
+
+def test_svisit_refuses_a_job_that_is_not_running(capsys):
+    job = _finished_job()
+    assert slurm.svisit([str(job.job_id)]) == 1
+    assert "not RUNNING" in capsys.readouterr().err
+
+
+def test_svisit_test_mode_shows_the_srun_it_would_run(capsys):
+    job = _finished_job(state=slurm.RUNNING, end_time=0.0)
+    assert slurm.svisit(["-t", str(job.job_id), "nvtop"]) == 0
+    assert f"srun --pty --overlap --jobid={job.job_id} nvtop" in capsys.readouterr().out
+
+
+def test_svisit_without_a_job_id_says_so(capsys):
+    assert slurm.svisit([]) == 1
+    assert "no running job found" in capsys.readouterr().err
+
+
 # ---------------------------------------------------------------- nvidia-smi
 
 

@@ -67,6 +67,26 @@ class DeviceSpec:
     # the "memory utilisation" percentage NVML reports.
     mem_bandwidth_gbps: float
 
+    # ---- published specifications, not measurements -----------------------
+    #
+    # Nothing below is emulated: no arithmetic in this environment runs at
+    # these rates, and none of it is measured here. They are the vendor's
+    # figures, carried so that a learner can ask "what would this card be good
+    # at?" against the card they are currently pretending to have. The
+    # fp64:fp32 ratio is the number that actually decides which cards suit
+    # which software, and it varies by a factor of sixty across this fleet.
+    fp32_tflops: float = 0.0
+    fp64_tflops: float = 0.0
+    tf32_tflops: float = 0.0  # tensor core, dense
+    fp16_tflops: float = 0.0  # tensor core, dense
+
+    # How this card is spelled in a Slurm request, and how many sit in one
+    # node, on the cluster this workshop teaches against.
+    gres_name: str = ""
+    max_per_node: int = 1
+    host_cores_per_node: int = 0
+    host_mem_gb_per_node: int = 0
+
     @property
     def mem_total_bytes(self) -> int:
         return self.mem_total_mib * MIB
@@ -74,6 +94,13 @@ class DeviceSpec:
     @property
     def mem_reserved_bytes(self) -> int:
         return self.mem_reserved_mib * MIB
+
+    @property
+    def fp64_ratio(self) -> float:
+        """FP64 throughput as a fraction of FP32 — the 'is it a 1/64 card?' number."""
+        if not self.fp32_tflops:
+            return 0.0
+        return self.fp64_tflops / self.fp32_tflops
 
 
 L4 = DeviceSpec(
@@ -107,56 +134,82 @@ L4 = DeviceSpec(
     pcie_max_width=16,
     has_fan=False,
     mem_bandwidth_gbps=300.0,
+    fp32_tflops=30.3,
+    fp64_tflops=0.489,
+    tf32_tflops=60.0,
+    fp16_tflops=121.0,
+    gres_name="l4",
+    max_per_node=4,
+    host_cores_per_node=168,
+    host_mem_gb_per_node=768,
 )
 
-# A couple of alternatives, so the same image can host a workshop about a
-# different card without code changes. Values follow each board's public specs.
-A100_40GB = replace(
+# The rest of the cluster's fleet, so the same image can host a workshop about
+# any card a researcher might request. Values follow each board's public specs
+# and the node layout published at docs.nesi.org.nz/Batch_Computing/Hardware/.
+A100_80GB = replace(
     L4,
-    name="NVIDIA A100-PCIE-40GB",
+    name="NVIDIA A100-SXM4-80GB",
     architecture="Ampere",
-    mem_total_mib=40960,
-    mem_reserved_mib=608,
+    mem_total_mib=81920,
+    mem_reserved_mib=1024,
     sm_count=108,
     cuda_cores=6912,
     cc_major=8,
     cc_minor=0,
     max_clock_gr_mhz=1410,
     max_clock_sm_mhz=1410,
-    max_clock_mem_mhz=1215,
+    max_clock_mem_mhz=1593,
     idle_clock_gr_mhz=210,
     idle_clock_mem_mhz=405,
-    power_limit_w=250.0,
-    power_idle_w=35.0,
+    power_limit_w=400.0,
+    power_idle_w=50.0,
     power_min_limit_w=100.0,
     temp_idle_c=32.0,
     temp_max_load_c=72.0,
-    pci_device_id=0x20F110DE,
-    pci_subsys_id=0x145F10DE,
-    mem_bandwidth_gbps=1555.0,
+    pci_device_id=0x20B210DE,
+    pci_subsys_id=0x147F10DE,
+    mem_bandwidth_gbps=2039.0,
+    # 1:2 FP64. The only card in this fleet built for double precision.
+    fp32_tflops=19.5,
+    fp64_tflops=9.7,
+    tf32_tflops=156.0,
+    fp16_tflops=312.0,
+    gres_name="a100",
+    max_per_node=4,
+    host_cores_per_node=64,
+    host_mem_gb_per_node=512,
 )
 
-H100_PCIE = replace(
+H100_NVL = replace(
     L4,
-    name="NVIDIA H100 PCIe",
+    name="NVIDIA H100 NVL",
     architecture="Hopper",
-    mem_total_mib=81559,
-    mem_reserved_mib=784,
-    sm_count=114,
-    cuda_cores=14592,
+    mem_total_mib=95830,
+    mem_reserved_mib=1100,
+    sm_count=132,
+    cuda_cores=16896,
     cc_major=9,
     cc_minor=0,
-    max_clock_gr_mhz=1755,
-    max_clock_sm_mhz=1755,
-    max_clock_mem_mhz=1593,
-    power_limit_w=350.0,
-    power_idle_w=45.0,
+    max_clock_gr_mhz=1785,
+    max_clock_sm_mhz=1785,
+    max_clock_mem_mhz=2619,
+    power_limit_w=400.0,
+    power_idle_w=55.0,
     power_min_limit_w=200.0,
     temp_idle_c=33.0,
     temp_max_load_c=74.0,
-    pci_device_id=0x233110DE,
+    pci_device_id=0x232110DE,
     pci_subsys_id=0x167410DE,
-    mem_bandwidth_gbps=2000.0,
+    mem_bandwidth_gbps=3938.0,
+    fp32_tflops=60.0,
+    fp64_tflops=30.0,
+    tf32_tflops=835.0,
+    fp16_tflops=1671.0,
+    gres_name="h100",
+    max_per_node=2,
+    host_cores_per_node=168,
+    host_mem_gb_per_node=768,
 )
 
 RTX_PRO_6000 = replace(
@@ -196,14 +249,35 @@ RTX_PRO_6000 = replace(
     # The Server Edition is a dual-slot passive card, like the L4.
     has_fan=False,
     mem_bandwidth_gbps=1597.0,
+    # A consumer-lineage die: enormous FP32, 1/64 FP64. Fast at everything
+    # except the one thing a lot of scientific code needs.
+    fp32_tflops=120.0,
+    fp64_tflops=1.9,
+    tf32_tflops=240.0,
+    fp16_tflops=480.0,
+    gres_name="pro_6000",
+    max_per_node=2,
+    host_cores_per_node=168,
+    host_mem_gb_per_node=768,
 )
 
 DEVICES = {
     "l4": L4,
-    "a100": A100_40GB,
-    "h100": H100_PCIE,
+    "a100": A100_80GB,
+    "h100": H100_NVL,
     "rtxpro6000": RTX_PRO_6000,
 }
+
+# Fleet order for anything that prints a comparison: cheapest and smallest
+# first, which is also the order a researcher should try them in.
+FLEET = ("l4", "a100", "h100", "rtxpro6000")
+
+# Back-compatible aliases. The A100 and H100 definitions were originally the
+# PCIe parts; they now describe the SXM4-80GB and NVL boards this cluster
+# actually has, because a workshop that teaches the wrong VRAM figure teaches
+# the wrong request.
+A100_40GB = A100_80GB
+H100_PCIE = H100_NVL
 
 # Reported by nvidia-smi and NVML. Pinned to a real driver/CUDA pairing so that
 # version checks in learners' code behave the way they would on the cluster.

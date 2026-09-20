@@ -27,6 +27,9 @@ sinfo = "gpuemu.slurm:sinfo"
 sacct = "gpuemu.slurm:sacct"
 scontrol = "gpuemu.slurm:scontrol"
 srun = "gpuemu.slurm:srun"
+seff = "gpuemu.slurm:seff"
+svisit = "gpuemu.slurm:svisit"
+gpuemu-jobacct = "gpuemu.jobacct:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

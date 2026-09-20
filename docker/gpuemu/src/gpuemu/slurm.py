@@ -138,6 +138,23 @@ class Job:
     pid: int = 0
     gpu_ids: list[int] = field(default_factory=list)
     reason: str = "None"
+    qos: str = ""
+
+    # What the job actually used, for seff. CPU time and peak RSS come from
+    # wait4() when the job ends (see jobacct.py); the GPU figures have to be
+    # sampled while it runs, because utilisation is a rate and there is nothing
+    # left to read once the process is gone.
+    cpu_seconds: float = 0.0
+    max_rss_mb: float = 0.0
+    gpu_util_sum: float = 0.0
+    gpu_util_samples: int = 0
+    gpu_mem_peak_mb: float = 0.0
+
+    @property
+    def mean_gpu_util(self) -> float:
+        if not self.gpu_util_samples:
+            return 0.0
+        return self.gpu_util_sum / self.gpu_util_samples
 
     @property
     def elapsed(self) -> float:
@@ -299,6 +316,11 @@ def _sbatch_parser() -> argparse.ArgumentParser:
     ap.add_argument("--gpus-per-task", default=None)
     ap.add_argument("--hint", default=None)
     ap.add_argument("--wrap", default=None)
+    # Accepted and recorded rather than acted on. A workshop teaches people to
+    # write `--qos debug` for a quick test, and a script that errors out on the
+    # flag it was just told to use teaches the opposite.
+    ap.add_argument("-q", "--qos", default=None)
+    ap.add_argument("--profile", default=None)
     ap.add_argument("-h", "--help", action="store_true")
     return ap
 
@@ -463,6 +485,7 @@ def sbatch(argv: list[str] | None = None) -> int:
         ntasks=merged.ntasks or 1,
         time_limit_s=time_limit,
         reason="None",
+        qos=merged.qos or "",
     )
     store.save(job)
     print(f"Submitted batch job {job_id}")
@@ -649,6 +672,291 @@ def sacct(argv: list[str] | None = None) -> int:
     return 0
 
 
+# ------------------------------------------------------------------- seff
+#
+# Deliberately a line-for-line match of the cluster's own seff
+# (github.com/nesi/opt-nesi-bin, nn_seff), down to the column the '%' lands in
+# and the "kB/MB/GB" rounding, because the whole value of teaching it here is
+# that the output a learner reads in the workshop is the output they will read
+# on the cluster. The differences are in where the numbers come from: the real
+# one asks sacct for accounting records, this one reads the job file the
+# emulator's scheduler wrote.
+
+
+def _seff_time(seconds: float) -> str:
+    """``[D-]HH:MM:SS``, as seff's time2str formats it."""
+    minutes, secs = divmod(int(seconds), 60)
+    hours, minutes = divmod(minutes, 60)
+    days, hours = divmod(hours, 24)
+    prefix = "" if days < 1 else f"{days}-"
+    return prefix + "{:02}:{:02}:{:02}".format(hours, minutes, secs)
+
+
+def _seff_bytes(kbytes: float) -> str:
+    """``284.46 MB``, as seff's kbytes2str formats it. Input is kibibytes."""
+    from math import log
+
+    if kbytes <= 0:
+        return "%.2f %sB" % (0.0, "M")
+    mul = 1024
+    exp = min(int(log(kbytes) / log(mul)), 5)
+    prefix = "kMGTPE"[exp]
+    return "%.2f %sB" % (kbytes / mul**exp, prefix)
+
+
+def _seff_pct(label: str, pct: float, detail: str = "") -> str:
+    """``Label:  99%  detail``.
+
+    Every label is padded to 22 characters and every percentage is a whole
+    number right-aligned in 3, which is what lines the '%' up in column 26
+    across rows whose labels differ in length.
+    """
+    row = f"{label:<22}{pct: >3.0f}%"
+    return f"{row}  {detail}".rstrip()
+
+
+def _device_total_gb() -> float:
+    """Capacity of the emulated card, in GB, for the GPU memory line.
+
+    The real seff looks the board size up in a static per-partition table. Here
+    we ask the device, because the emulated card's memory is configurable and a
+    learner who reads "of 23 GB" while nvidia-smi says 1024MiB has been taught
+    to distrust the tool.
+    """
+    try:
+        from .shm import StateReader
+
+        reader = StateReader.try_open()
+        if reader is not None:
+            try:
+                snap = reader.read()
+                if snap.gpus:
+                    return snap.gpus[0].mem_total / (1024**3)
+            finally:
+                reader.close()
+    except (OSError, ValueError):
+        pass
+    from .spec import selected_device
+
+    return selected_device().mem_total_mib / 1024
+
+
+_SEFF_USAGE = """Usage: seff [Options] <JobID>
+       Options:
+       -M    Cluster
+       -h    Help
+       -j    JobID
+       -v    Version"""
+
+
+def _seff_one(job: Job, show_cluster: bool) -> None:
+    if show_cluster:
+        print("Cluster:", os.environ.get("GPUEMU_CLUSTER", "training"))
+    print("Job ID:", job.job_id)
+    print("State:", job.state)
+
+    # Efficiency figures for a job that is still going would be measured
+    # against a wall-time that has not finished happening, so seff declines to
+    # give them rather than give misleading ones.
+    if job.state in ACTIVE_STATES:
+        print(f"Efficiency not available for {job.state} jobs.")
+        return
+
+    if job.ntasks > 0:
+        print("Tasks:", job.ntasks)
+    print("Cores:", job.cpus)
+    if job.ntasks > 1:
+        print("Nodes: 1")
+
+    wall = job.elapsed
+    limit = job.time_limit_s
+    print(
+        _seff_pct(
+            "Job Wall-time:",
+            (100 * wall / limit) if limit else 0.0,
+            f"{_seff_time(wall)} of {_seff_time(limit)} time limit",
+        )
+    )
+
+    core_wall = wall * job.cpus
+    print(
+        _seff_pct(
+            "Avg CPU Utilisation:",
+            (job.cpu_seconds / core_wall * 100) if core_wall else 0.0,
+            f"{_seff_time(job.cpu_seconds)} of {_seff_time(core_wall)} core-walltime",
+        )
+    )
+
+    req_kb = job.mem_mb * 1024
+    used_kb = job.max_rss_mb * 1024
+    print(
+        _seff_pct(
+            "Peak Mem Utilisation:",
+            (100 * used_kb / req_kb) if req_kb else 0.0,
+            f"{_seff_bytes(used_kb)} of {_seff_bytes(req_kb)}",
+        )
+    )
+
+    # No GPU requested means no GPU lines, exactly as on the cluster - and that
+    # absence is itself the diagnosis. If you expected these two lines and they
+    # are not here, the job never had a GPU in the first place.
+    if not job.gpus:
+        return
+
+    alloc_gb = _device_total_gb() * max(1, len(job.gpu_ids))
+    print(_seff_pct("Peak GPU Utilisation:", job.mean_gpu_util))
+    print(
+        _seff_pct(
+            "Peak GPU Memory Util:",
+            (100 * job.gpu_mem_peak_mb / (alloc_gb * 1024)) if alloc_gb else 0.0,
+            f"{_seff_bytes(job.gpu_mem_peak_mb * 1024)} of {alloc_gb:.0f} GB",
+        )
+    )
+
+
+def seff(argv: list[str] | None = None) -> int:
+    """Report how much of its allocation a finished job actually used.
+
+    The two GPU lines are the reason this matters for a GPU workshop. A job can
+    report 99% CPU efficiency and still have left the GPU completely idle, and
+    nothing else a researcher runs after the fact will tell them so.
+    """
+    argv = list(sys.argv[1:] if argv is None else argv)
+
+    # getopt rather than argparse, to accept the same clustered short options
+    # the real seff does and to keep '-h' meaning help rather than argparse's
+    # auto-generated usage.
+    import getopt
+
+    try:
+        opts, rest = getopt.getopt(argv, "hvdfj:M:")
+    except getopt.GetoptError as exc:
+        print(f"seff: {exc}", file=sys.stderr)
+        print(_SEFF_USAGE, file=sys.stderr)
+        return 1
+    flags = dict(opts)
+
+    if "-v" in flags:
+        print("Training environment version of seff (emulated GPU)")
+        return 1
+    if "-h" in flags or not (rest or "-j" in flags):
+        print(_SEFF_USAGE)
+        return 1
+
+    job_ids = [flags["-j"]] if "-j" in flags else []
+    job_ids.extend(rest)
+
+    store = JobStore()
+    jobs = []
+    for raw in job_ids:
+        for part in str(raw).split(","):
+            # Accept 1234_5 and 1234.batch, which is what people paste in.
+            base = part.strip().split(".")[0].split("_")[0]
+            if not base.isdigit():
+                continue
+            job = store.load(int(base))
+            if job is not None:
+                jobs.append(job)
+
+    if not jobs:
+        print("Job not found.", file=sys.stderr)
+        return 2
+
+    for index, job in enumerate(jobs):
+        if index:
+            print()
+        _seff_one(job, show_cluster="-M" in flags)
+    return 0
+
+
+# ----------------------------------------------------------------- svisit
+
+
+def svisit(argv: list[str] | None = None) -> int:
+    """Open a terminal inside a running job, so nvtop can watch its GPU.
+
+    On the cluster this is a wrapper around ``srun --pty --overlap --jobid=``,
+    which drops you onto the compute node your job landed on - the only place
+    from which you can see the GPU that job is using. Here there is one node
+    and you are already on it, so the only real work is finding the job and
+    handing you its ``CUDA_VISIBLE_DEVICES``. The habit is what transfers:
+    find the running job, visit it, run nvtop.
+    """
+    argv = list(sys.argv[1:] if argv is None else argv)
+
+    test_only = False
+    job_id: str | None = None
+    command: list[str] = []
+
+    while argv:
+        arg = argv[0]
+        if arg == "-h":
+            print(
+                "Usage:\n"
+                "  svisit [-t] [[-j] job] [command]\n"
+                "    -t        Test instead - just show the command svisit would use.\n"
+                "    -j job    A Slurm Job ID. If not given, your most recent running\n"
+                "              job is used, as found by 'squeue --me'.\n"
+                "    command   Defaults to your shell.\n"
+                "\n"
+                "Description:\n"
+                "  svisit starts a terminal session inside your currently running\n"
+                "  Slurm job, which is where you can watch its GPU with nvtop."
+            )
+            return 0
+        if arg == "-t":
+            test_only = True
+        elif arg == "-j":
+            argv.pop(0)
+            job_id = argv[0] if argv else None
+        elif job_id is None and re.fullmatch(r"[0-9_.]+", arg):
+            job_id = arg
+        else:
+            command = list(argv)
+            break
+        argv.pop(0)
+
+    store = JobStore()
+    if job_id is None:
+        running = [j for j in store.all() if j.state == RUNNING and j.user == _current_user()]
+        if not running:
+            print(
+                "No JobID provided and no running job found either. "
+                "'svisit -h' for help.",
+                file=sys.stderr,
+            )
+            return 1
+        job = running[-1]
+    else:
+        base = job_id.split(".")[0].split("_")[0]
+        job = store.load(int(base)) if base.isdigit() else None
+        if job is None:
+            print(f"svisit: job {job_id} not found.", file=sys.stderr)
+            return 1
+
+    if job.state != RUNNING:
+        print(
+            f"svisit: job {job.job_id} is {job.state}, not RUNNING, so there is no "
+            "job to visit. 'squeue --me' shows what is still going.",
+            file=sys.stderr,
+        )
+        return 1
+
+    if not command:
+        command = [os.environ.get("SHELL", "/bin/bash"), "-l"]
+
+    if test_only:
+        print(f"srun --pty --overlap --jobid={job.job_id} {' '.join(command)}")
+        return 0
+
+    env = dict(os.environ)
+    env["CUDA_VISIBLE_DEVICES"] = ",".join(str(i) for i in job.gpu_ids)
+    env["SLURM_JOB_ID"] = str(job.job_id)
+    env["SLURM_JOBID"] = str(job.job_id)
+    print(f"Visiting {NODE_NAME}, where job {job.job_id} ({job.name}) is running.")
+    return subprocess.call(command, cwd=job.workdir, env=env)
+
+
 def scontrol(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if len(argv) >= 2 and argv[0] == "show" and argv[1].startswith("job"):
@@ -771,6 +1079,11 @@ class Scheduler:
         self.total_mem = node_memory_mb()
         self.total_gpus = node_gpus()
         self._stop = False
+        # GPU samples, kept in memory between flushes so a running job is not
+        # rewritten to disk twice a second.
+        self._acc: dict[int, dict[str, float]] = {}
+        self._reader = None
+        self._last_flush = 0.0
 
     def stop(self, *_):
         self._stop = True
@@ -794,9 +1107,108 @@ class Scheduler:
                 pass
 
     def tick(self) -> None:
+        self._sample_gpu()
         self._reap()
         self._enforce_limits()
         self._launch_eligible()
+        self._flush_samples()
+
+    # -- accounting --------------------------------------------------
+
+    def usage_dir(self) -> Path:
+        d = self.store.root / "usage"
+        d.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chmod(d, 0o1777)
+        except OSError:
+            pass
+        return d
+
+    def _sample_gpu(self) -> None:
+        """Record GPU utilisation and memory for each running job.
+
+        Utilisation is a rate, not a total: unlike CPU time there is nothing
+        left to read once the job has exited, so it has to be sampled while the
+        job is alive. We read the devices the job was allocated, which is what
+        Slurm's own GPU accounting does. Reading the whole device rather than
+        just this job's claims is correct here because the scheduler hands each
+        GPU to one job at a time, so the device *is* the job.
+        """
+        running = [j for j in self.store.all() if j.state == RUNNING and j.gpu_ids]
+        if not running:
+            return
+        try:
+            if self._reader is None:
+                from .shm import StateReader
+
+                self._reader = StateReader.try_open()
+            if self._reader is None:
+                return
+            snap = self._reader.read()
+        except (OSError, ValueError):
+            self._reader = None
+            return
+
+        for job in running:
+            acc = self._acc.setdefault(
+                job.job_id, {"util_sum": 0.0, "n": 0.0, "mem_peak": 0.0}
+            )
+            utils: list[int] = []
+            mem_mb = 0.0
+            for idx in job.gpu_ids:
+                if idx >= len(snap.gpus):
+                    continue
+                gpu = snap.gpus[idx]
+                utils.append(gpu.util_gpu)
+                mem_mb += gpu.mem_used / (1024 * 1024)
+            if not utils:
+                continue
+            acc["util_sum"] += sum(utils) / len(utils)
+            acc["n"] += 1
+            acc["mem_peak"] = max(acc["mem_peak"], mem_mb)
+
+    def _apply_samples(self, job: Job) -> None:
+        acc = self._acc.get(job.job_id)
+        if not acc or not acc["n"]:
+            return
+        job.gpu_util_sum = acc["util_sum"]
+        job.gpu_util_samples = int(acc["n"])
+        job.gpu_mem_peak_mb = acc["mem_peak"]
+
+    def _flush_samples(self) -> None:
+        """Persist samples periodically so seff works on a job that is still running."""
+        now = time.time()
+        if now - self._last_flush < 2.0:
+            return
+        self._last_flush = now
+        for job_id in list(self._acc):
+            job = self.store.load(job_id)
+            if job is None or job.state != RUNNING:
+                continue
+            self._apply_samples(job)
+            self.store.save(job)
+
+    def _read_usage(self, job: Job) -> None:
+        """Take the kernel's CPU and memory accounting from the jobacct sidecar."""
+        path = self.usage_dir() / f"{job.job_id}.json"
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        try:
+            job.cpu_seconds = float(data.get("cpu_seconds", 0.0))
+            job.max_rss_mb = float(data.get("max_rss_mb", 0.0))
+        except (TypeError, ValueError):
+            pass
+        try:
+            path.unlink()
+        except OSError:
+            pass
+
+    def _finalise(self, job: Job) -> None:
+        self._apply_samples(job)
+        self._acc.pop(job.job_id, None)
+        self._read_usage(job)
 
     # -- phases ------------------------------------------------------
 
@@ -808,7 +1220,9 @@ class Scheduler:
             del self.running[job_id]
             job = self.store.load(job_id)
             if job is None:
+                self._acc.pop(job_id, None)
                 continue
+            self._finalise(job)
             job.end_time = time.time()
             job.exit_code = code if code >= 0 else 128 - code
             if job.state == CANCELLED:
@@ -844,6 +1258,7 @@ class Scheduler:
                     os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
             except OSError:
                 pass
+        self._finalise(job)
         job.state = state
         job.reason = reason
         job.end_time = time.time()
@@ -909,9 +1324,25 @@ class Scheduler:
         out = open(job.stdout, "ab", buffering=0)
         err = out if job.stderr == job.stdout else open(job.stderr, "ab", buffering=0)
 
+        # Run the script under the accounting wrapper rather than bash directly,
+        # so seff can report the CPU time and peak memory the kernel measured
+        # instead of whatever happened to be alive at the last poll.
+        usage_file = self.usage_dir() / f"{job.job_id}.json"
+        try:
+            usage_file.unlink()
+        except OSError:
+            pass
+
+        # Invoked by path rather than `-m gpuemu.jobacct`: the scheduler may be
+        # running from a source checkout where the package is on sys.path but
+        # not on PYTHONPATH, and a child process would not inherit that.
+        # jobacct imports nothing but the standard library, so this works
+        # whether gpuemu is installed or not.
+        wrapper = str(Path(__file__).resolve().parent / "jobacct.py")
+
         try:
             proc = subprocess.Popen(
-                ["/bin/bash", job.script],
+                [sys.executable, wrapper, str(usage_file), job.script],
                 cwd=job.workdir,
                 env=env,
                 stdout=out,
